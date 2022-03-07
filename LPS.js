@@ -3,15 +3,20 @@ const ObjectId = require('mongodb').ObjectID
 const randomstring = require('randomstring');
 const io = require('socket.io-client');
 const Discord = require('discord.js');
+const axios = require('axios');
 const client = new Discord.Client();
 
 class Bot {
 
-  constructor(dev, token, config, mongoURI, dbo) {
+  constructor(dev, token, config, mongoURI, dbo, api_url, api_token) {
     this.dev = dev;
     this.token = token;
     this.config = require(config);
     this.connectMongo(mongoURI, dbo);
+    
+    // police-cad-api parameters
+    this.api_url = api_url
+    this.api_token = api_token
   }
 
   async connectMongo(mongoURI, dbo) {
@@ -53,102 +58,85 @@ class Bot {
     let user = await this.dbo.collection("users").findOne({"user.discord.id":message.author.id}).then(user => user);
     if (!user) return message.channel.send(`You are not logged in ${message.author}`);
     let data;
-    if (user.user.activeCommunity=='' || user.user.activeCommunity==null) {
-      if (args.length==0) return message.channel.send(`You must provide a \`First Name\`, \`Last Name\` and \`DOB\`(yyyy-mm-dd) ${message.author}`);
-      if (args.length==1) return message.channel.send(`You're missing a \`Last Name\` and \`DOB\`(yyyy-mm-dd) ${message.author}`);
-      if (args.length==2) return message.channel.send(`You're missing a \`DOB\`(yyyy-mm-dd) ${message.author}`);
-    }
-    if (args.length==0) return message.channel.send(`You must provide a \`First Name\` and \`Last Name\` ${message.author}`);
-    if (args.length==1) return message.channel.send(`You're missing a \`Last Name\` ${message.author}`);
+    if (args.length==0) return message.channel.send(`You must provide a \`First Name\`, \`Last Name\` and \`DOB\`(yyyy-mm-dd) ${message.author}`);
+    if (args.length==1) return message.channel.send(`You're missing a \`Last Name\` and \`DOB\`(yyyy-mm-dd) ${message.author}`);
+    if (args.length==2) return message.channel.send(`You're missing a \`DOB\`(yyyy-mm-dd) ${message.author}`);
 
-    if (user.user.activeCommunity=='' || user.user.activeCommunity==null) {
-      data = {
-        user: user,
-        query: {
-          firstName: args[0],
-          lastName: args[1],
-          dateOfBirth: args[2],
-          activeCommunityID: user.user.activeCommunity
-        }
-      }
-    } else {
-      data = {
-        user: user,
-        query: {
-          firstName: args[0],
-          lastName: args[1],
-          activeCommunityID: user.user.activeCommunity
-        }
+    let apiConfig = {
+      headers: {
+        "Authorization": this.api_token
+      },
+      params: {
+        first_name: args[0],
+        last_name: args[1],
+        dob: args[2],
+        community_id: user.user.activeCommunity
       }
     }
 
-    const socket = io.connect(this.config.socket);
-    socket.emit("bot_name_search", data);
-    socket.on("bot_name_search_results", results => {
-
-      if (results.user._id==user._id) {
-        if (results.civilians.length == 0) {
-          return message.channel.send(`Name \`${args[0]} ${args[1]}\` not found ${message.author}`);
-        }
-
-        for (let i = 0; i < results.civilians.length; i++) {
-          // Get Drivers Licence Status
-          let licenceStatus;
-          if (results.civilians[i].civilian.licenseStatus == 1) licenceStatus = 'Valid';
-          if (results.civilians[i].civilian.licenceStatus == 2) licenceStatus = 'Revoked';
-          if (results.civilians[i].civilian.licenceStatus == 3) licenceStatus = 'None';
-          // Get Firearm Licence Status
-          let firearmLicence = results.civilians[i].civilian.firearmLicense;
-          if (firearmLicence == undefined || firearmLicence == null) firearmLicence = 'None';
-          if (firearmLicence == '2') firearmLicence = 'Valid';
-          if (firearmLicence == '3') firearmLicence = 'Revoked';
-          let nameResult = new Discord.MessageEmbed()
-          .setColor('#0099ff')
-          .setTitle(`**${results.civilians[i].civilian.firstName} ${results.civilians[i].civilian.lastName} | ${results.civilians[i]._id}**`)
-          .setURL('https://discord.gg/jgUW656v2t')
-          .setAuthor('LPS Website Support', 'https://raw.githubusercontent.com/Linesmerrill/police-cad/master/lines-police-server.png', 'https://discord.gg/jgUW656v2t')
-          .setDescription('Name Search Results')
-          .addFields(
-            { name: `**First Name**`, value: `\`${results.civilians[i].civilian.firstName}\``, inline: true },
-            { name: `**Last Name**`, value: `\`${results.civilians[i].civilian.lastName}\``, inline: true },
-            { name: `**DOB**`, value: `\`${results.civilians[i].civilian.birthday}\``, inline: true },
-            { name: `**Drivers License**`, value: `\`${licenceStatus}\``, inline: true },
-            { name: `**Firearm Licence**`, value: `\`${firearmLicence}\``, inline: true },
-            { name: `**Gender**`, value: `\`${results.civilians[i].civilian.gender}\``, inline: true }
-          )
-          // Check Other details
-          let address = results.civilians[i].civilian.address;
-          let occupation = results.civilians[i].civilian.occupation;
-          let height = results.civilians[i].civilian.height;
-          let weight = results.civilians[i].civilian.weight;
-          let eyeColor = results.civilians[i].civilian.eyeColor;
-          let hairColor = results.civilians[i].civilian.hairColor;
-          if (address != null && address != undefined && address != '') nameResult.addFields({ name: `**Address**`, value: `\`${address}\``, inline: true });
-          if (occupation != null && occupation != undefined && occupation != '') nameResult.addFields({ name: `**Occupation**`, value: `\`${occupation}\``, inline: true });
-          if (height!=null&&height!=undefined&&height!="NaN"&&height!='') {
-            if (results.civilians[i].civilian.heightClassification=='imperial') {
-              let ft = Math.floor(height/12);
-              let inch = height%12;
-              nameResult.addFields({ name: '**Height**', value: `\`${ft}'${inch}"\``, inline: true });
-            } else {
-              nameResult.addFields({ name: '**Height**', value: `\`${height}cm\``, inline: true });
-            }
-          }
-          if (weight!=null&&weight!=undefined&&weight!='') {
-            if (results.civilians[i].civilian.weightClassification=='imperial') {
-              nameResult.addFields({ name: '**Weight**', value: `\`${weight}lbs.\``, inline: true });
-            } else {
-              nameResult.addFields({ name: '**Weight**', value: `\`${weight}kgs.\``, inline: true });
-            } 
-          }
-          if (eyeColor!=null&&eyeColor!=undefined&&eyeColor!='') nameResult.addFields({name:'**Eye Color**',value:`\`${eyeColor}\``,inline:true});
-          if (hairColor!=null&&hairColor!=undefined&&hairColor!='') nameResult.addFields({name:'**Hair Color**',value:`\`${hairColor}\``,inline:true});
-          nameResult.addFields({name:'**Organ Donor**',value:`\`${results.civilians[i].civilian.organDonor}\``,inline:true});
-          nameResult.addFields({name:'**Veteran**',value:`\`${results.civilians[i].civilian.veteran}\``,inline:true});
-          message.channel.send(nameResult);
-        }
+    axios.get(`${this.api_url}/api/v1/name-search`, apiConfig).then(function (results) {
+      if (results.data.length == 0) {
+        return message.channel.send(`Name \`${args[0]} ${args[1]}\` not found ${message.author}`);
       }
-      socket.disconnect();
+
+      for (let i = 0; i < results.data.length; i++) {
+        // Get Drivers Licence Status
+        let licenceStatus;
+        if (results.data[i].civilian.licenseStatus == 1) licenceStatus = 'Valid';
+        if (results.data[i].civilian.licenceStatus == 2) licenceStatus = 'Revoked';
+        if (results.data[i].civilian.licenceStatus == 3) licenceStatus = 'None';
+        // Get Firearm Licence Status
+        let firearmLicence = results.data[i].civilian.firearmLicense;
+        if (firearmLicence == undefined || firearmLicence == null) firearmLicence = 'None';
+        if (firearmLicence == '2') firearmLicence = 'Valid';
+        if (firearmLicence == '3') firearmLicence = 'Revoked';
+        let nameResult = new Discord.MessageEmbed()
+        .setColor('#0099ff')
+        .setTitle(`**${results.data[i].civilian.firstName} ${results.data[i].civilian.lastName} | ${results.data[i]._id}**`)
+        .setURL('https://discord.gg/jgUW656v2t')
+        .setAuthor('LPS Website Support', 'https://raw.githubusercontent.com/Linesmerrill/police-cad/master/lines-police-server.png', 'https://discord.gg/jgUW656v2t')
+        .setDescription('Name Search Results')
+        .addFields(
+          { name: `**First Name**`, value: `\`${results.data[i].civilian.firstName}\``, inline: true },
+          { name: `**Last Name**`, value: `\`${results.data[i].civilian.lastName}\``, inline: true },
+          { name: `**DOB**`, value: `\`${results.data[i].civilian.birthday}\``, inline: true },
+          { name: `**Drivers License**`, value: `\`${licenceStatus}\``, inline: true },
+          { name: `**Firearm Licence**`, value: `\`${firearmLicence}\``, inline: true },
+          { name: `**Gender**`, value: `\`${results.data[i].civilian.gender}\``, inline: true }
+        )
+        // Check Other details
+        let address = results.data[i].civilian.address;
+        let occupation = results.data[i].civilian.occupation;
+        let height = results.data[i].civilian.height;
+        let weight = results.data[i].civilian.weight;
+        let eyeColor = results.data[i].civilian.eyeColor;
+        let hairColor = results.data[i].civilian.hairColor;
+        if (address != null && address != undefined && address != '') nameResult.addFields({ name: `**Address**`, value: `\`${address}\``, inline: true });
+        if (occupation != null && occupation != undefined && occupation != '') nameResult.addFields({ name: `**Occupation**`, value: `\`${occupation}\``, inline: true });
+        if (height!=null&&height!=undefined&&height!="NaN"&&height!='') {
+          if (results.data[i].civilian.heightClassification=='imperial') {
+            let ft = Math.floor(height/12);
+            let inch = height%12;
+            nameResult.addFields({ name: '**Height**', value: `\`${ft}'${inch}"\``, inline: true });
+          } else {
+            nameResult.addFields({ name: '**Height**', value: `\`${height}cm\``, inline: true });
+          }
+        }
+        if (weight!=null&&weight!=undefined&&weight!='') {
+          if (results.data[i].civilian.weightClassification=='imperial') {
+            nameResult.addFields({ name: '**Weight**', value: `\`${weight}lbs.\``, inline: true });
+          } else {
+            nameResult.addFields({ name: '**Weight**', value: `\`${weight}kgs.\``, inline: true });
+          } 
+        }
+        if (eyeColor!=null&&eyeColor!=undefined&&eyeColor!='') nameResult.addFields({name:'**Eye Color**',value:`\`${eyeColor}\``,inline:true});
+        if (hairColor!=null&&hairColor!=undefined&&hairColor!='') nameResult.addFields({name:'**Hair Color**',value:`\`${hairColor}\``,inline:true});
+        nameResult.addFields({name:'**Organ Donor**',value:`\`${results.data[i].civilian.organDonor}\``,inline:true});
+        nameResult.addFields({name:'**Veteran**',value:`\`${results.data[i].civilian.veteran}\``,inline:true});
+        message.channel.send(nameResult);
+      }
+    }).catch(function (error) {
+      return message.channel.send(`There was an error trying to retrieve the data`);
     });
   }
 
@@ -749,7 +737,6 @@ class Bot {
       if (command == 'ping') message.channel.send('Pong!');
       if (command == 'help') message.channel.send(help);
       if (command == 'stats') message.channel.send(stats);
-      console.debug('"',message.channel.type,'"')
       if (command == 'setprefix') {
         if (message.channel.type=="dm") return message.author.send(`You cannot set a prefix in a dm ${message.author}`);
         if(!message.member.hasPermission(["ADMINISTRATOR","MANAGE_GUILD"])) return message.channel.send(`You don't have permission to used this command ${message.author}`);
